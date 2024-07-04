@@ -1,0 +1,8 @@
+datasets==2.20.0
+numpy==1.24.3
+opencv_python==4.9.0.80
+Requests==2.32.3
+tiktoken==0.6.0
+torch==2.0.1
+tqdm==4.65.0
+transformers==4.39.3
