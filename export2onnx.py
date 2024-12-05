@@ -93,12 +93,11 @@ class GPT(nn.Module):
         ))
         self.lm_head = nn.Linear(config.n_embd, config.vocab_size, bias=False)
 
-    def forward(self, idx):
+    def forward(self, idx, pos):
         # idx is of shape (B, T)
         B, T = idx.size()
         assert T <= self.config.block_size, f"Cannot forward sequence of length {T}, block size is only {self.config.block_size}"
         # forward the token and posisition embeddings
-        pos = torch.arange(0, T, dtype=torch.long, device=idx.device) # shape (T)
         pos_emb = self.transformer.wpe(pos) # position embeddings of shape (T, n_embd)
         tok_emb = self.transformer.wte(idx) # token embeddings of shape (B, T, n_embd)
         x = tok_emb + pos_emb
@@ -167,6 +166,38 @@ def arg_parser():
     parser.add_argument("--batch_size", type=int, default=1, help="batch size")
     return parser
 
+@torch.no_grad()
+def generate_text(model, enc, x, max_length):
+
+    sample_rng = torch.Generator(device=device)
+    sample_rng.manual_seed(42)
+
+    ## lets make inference with the model
+    for _ in range(max_length):
+
+        pos = torch.arange(0, x.shape[1], dtype=torch.int32, device=x.device) # shape (T)
+        # print(x.shape, pos.shape)
+
+        logits = model(x, pos)
+
+        # take the logits at the last position
+        logits = logits[:, -1, :] # (B, vocab_size)
+        # get the probabilities
+        probs = F.softmax(logits, dim=-1)
+        # do top-k sampling of 50 (huggingface pipeline default)
+        # topk_probs here becomes (5, 50), topk_indices is (5, 50)
+        topk_probs, topk_indices = torch.topk(probs, 50, dim=-1)
+        # select a token from the top-k probabilities
+        # note: multinomial does not demand the input to sum to 1
+        ix = torch.multinomial(topk_probs, 1, generator=sample_rng) # (B, 1)
+        # gather the corresponding indices
+        xcol = torch.gather(topk_indices, -1, ix) # (B, 1)
+        # append to the sequence
+        x = torch.cat((x, xcol), dim=1)
+
+    ## decode the output
+    return enc.decode(x[0].tolist())
+
 if __name__ == '__main__':
 
     args = arg_parser().parse_args()
@@ -187,7 +218,7 @@ if __name__ == '__main__':
    # prefix tokens
     enc = tiktoken.get_encoding('gpt2')
     tokens = enc.encode(prompt)
-    tokens = torch.tensor(tokens, dtype=torch.long)
+    tokens = torch.tensor(tokens, dtype=torch.int32)
     tokens = tokens.unsqueeze(0).repeat(num_return_sequences, 1)
     x = tokens.to(device)
 
@@ -195,7 +226,17 @@ if __name__ == '__main__':
         print("Input length exceeds the maximum length. Truncating the input to max_length. Consider increasing the max_length!")
         x = x[:, :max_length]
 
+    pos = torch.arange(0, len(tokens), dtype=torch.int32, device=x.device) # shape (T)
+
     model = GPT.from_pretrained('gpt2')
+
+    # config = GPTConfig(
+    #     vocab_size=50257,
+    #     n_layer=1,
+    #     n_head=1,
+    #     n_embd=768
+    # )
+    # model = GPT(config)
 
     # check memory occupied be the model
     total_params = sum(p.numel() for p in model.parameters())
@@ -205,8 +246,37 @@ if __name__ == '__main__':
     model.eval()
     model.to(device)
 
-     ## export the model to onnx
-    print("Exporting the model to ONNX")
-    torch.onnx.export(model, x, "gpt22.onnx", verbose=True)
-
+     # export the model to onnx
+    print("Exporting the model to ONNX with dynamic sequence length")
+    torch.onnx.export(
+        model,
+        (x, pos),
+        "gpt2_dynamic.onnx",
+        verbose=True,
+        input_names=['input_ids', 'position_ids'],
+        output_names=['logits'],
+        dynamic_axes={
+            'input_ids': {1: 'sequence_length'},  # Make the sequence length dimension dynamic
+            'logits': {1: 'sequence_length'}      # Ensure the output sequence length is also dynamic
+        }
+    )
     print("Model exported successfully!!!")
+
+
+    ## run the model
+    output = generate_text(model, enc, x, max_length)
+    print(output)
+
+
+
+    ## static export
+    # print("Exporting the model to ONNX with static sequence length")
+    # torch.onnx.export(
+    #     model,
+    #     (x, pos),
+    #     "gpt2_static.onnx",
+    #     verbose=True,
+    #     input_names=['input_ids', 'position_ids'],
+    #     output_names=['logits'],
+    # )
+    # print("Model exported successfully!!!")
