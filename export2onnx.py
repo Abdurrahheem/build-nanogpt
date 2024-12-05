@@ -227,16 +227,7 @@ if __name__ == '__main__':
         x = x[:, :max_length]
 
     pos = torch.arange(0, len(tokens), dtype=torch.int32, device=x.device) # shape (T)
-
     model = GPT.from_pretrained('gpt2')
-
-    # config = GPTConfig(
-    #     vocab_size=50257,
-    #     n_layer=1,
-    #     n_head=1,
-    #     n_embd=768
-    # )
-    # model = GPT(config)
 
     # check memory occupied be the model
     total_params = sum(p.numel() for p in model.parameters())
@@ -262,21 +253,6 @@ if __name__ == '__main__':
     )
     print("Model exported successfully!!!")
 
-
     ## run the model
     output = generate_text(model, enc, x, max_length)
     print(output)
-
-
-
-    ## static export
-    # print("Exporting the model to ONNX with static sequence length")
-    # torch.onnx.export(
-    #     model,
-    #     (x, pos),
-    #     "gpt2_static.onnx",
-    #     verbose=True,
-    #     input_names=['input_ids', 'position_ids'],
-    #     output_names=['logits'],
-    # )
-    # print("Model exported successfully!!!")
